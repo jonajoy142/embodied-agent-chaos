@@ -1,0 +1,48 @@
+# Example chaos manifest for Weeks 3–4 fault injection experiments.
+#
+# Load with:
+#   ChaosConfig.from_yaml("config/chaos_example.yaml")
+
+mode: concurrent
+seed: 42
+sim_timestep: 0.0041666667  # 240 Hz
+
+faults:
+  - fault_type: sensor_lag
+    enabled: true
+    trigger:
+      kind: time
+      after_seconds: 1.0
+    intensity:
+      lag_seconds: 0.75
+    probability: 1.0
+
+  - fault_type: grip_slip
+    enabled: true
+    trigger:
+      kind: event
+      phase: lift
+    intensity:
+      slip_probability: 0.85
+      weaken_force_factor: 0.0
+    probability: 1.0
+
+  - fault_type: unreachable_ik
+    enabled: false
+    trigger:
+      kind: event
+      phase: pick
+    intensity:
+      offset_magnitude: 0.35
+      offset: [1.0, 0.0, 0.0]
+    probability: 1.0
+
+  - fault_type: planner_output_corruption
+    enabled: false
+    trigger:
+      kind: immediate
+    intensity:
+      corruption_probability: 1.0
+      keys_to_delete: [actions, target]
+      inject_malformed_chars: true
+    probability: 0.5

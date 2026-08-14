@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpha"
+version = "0.1.0"
+description = "Chaos-engineering test harness for LLM-agent-driven robot manipulation in simulation."
+requires-python = ">=3.10"
+dependencies = [
+    "pybullet-arm64>=3.2.8; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "pybullet>=3.2.6; platform_system != 'Darwin' or platform_machine != 'arm64'",
+    "numpy>=1.26",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+agent = ["openai>=1.0"]                            # Optional real LLM provider; mock works without this
+dashboard = ["streamlit>=1.35"]                     # Week 8
+analytics = ["pandas>=2.0", "matplotlib>=3.8"]      # Week 5 experiment analysis
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]

@@ -1,0 +1,74 @@
+# Phase A pilot experiment configuration
+#
+# This file defines the formal pilot schedule. Do NOT treat pilot output as
+# final research results — use it to estimate variance and calibrate gates.
+#
+# Run (after validation checklist passes):
+#   OPENAI_API_KEY=... python scripts/run_pilot.py --dry-run
+#   OPENAI_API_KEY=... python scripts/run_pilot.py
+
+experiment_id: phase_a_pilot
+phase: pilot
+description: >
+  Phase A pilot — variance estimation and instrumentation validation.
+  OpenAI agent only; MockLLMClient excluded from formal results.
+
+master_seed: 42
+episodes_per_variation: 5
+control_runs: 5
+concurrent_runs: 5
+concurrent_intensity: medium
+
+agent:
+  provider: openai
+  model: gpt-4o
+  min_interval_seconds: 0.5
+
+block: red
+
+# Calibrated intensity labels (see experiment_matrix.intensity_params_for_fault)
+intensities:
+  - low
+  - medium
+  - high
+
+conditions:
+  - id: CONTROL
+    group: control
+    fault_type: none
+    intensities: [none]
+
+  - id: F1
+    group: fault_matrix
+    fault_type: sensor_lag
+    label: Sensor/observation fault
+    intensities: [low, medium, high]
+
+  - id: F2
+    group: fault_matrix
+    fault_type: grip_slip
+    label: Actuation/grip-slip fault
+    intensities: [low, medium, high]
+
+  - id: F3
+    group: fault_matrix
+    fault_type: unreachable_ik
+    label: Kinematic/unreachable-target fault
+    intensities: [low, medium, high]
+
+  - id: F4
+    group: fault_matrix
+    fault_type: planner_output_corruption
+    label: Planner/schema robustness fault
+    intensities: [low, medium, high]
+
+  - id: CONCURRENT
+    group: concurrent
+    fault_types: [sensor_lag, grip_slip]
+    label: Concurrent F1 + F2
+    intensities: [medium]
+
+output:
+  results_dir: results/pilot
+  raw_data_dir: data/raw/pilot
+  processed_data_dir: data/processed/pilot
