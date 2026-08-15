@@ -122,7 +122,7 @@ def test_load_pilot_config():
     pilot = load_pilot_config(str(pilot_path))
     scenarios = generate_pilot_scenarios(pilot)
     assert pilot.experiment_id == "phase_a_pilot"
-    assert pilot.agent_provider == "openai"
+    assert pilot.agent_provider == "ollama"
     assert len(scenarios) == 70  # 5 control + 4*3*5 faults + 5 concurrent
 
 
@@ -134,3 +134,39 @@ def test_seed_deterministic_environment_is_repeatable():
     seed_deterministic_environment(42)
     second = random.random()
     assert first == second
+
+
+def test_pilot_config_accepts_ollama_provider():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pilot_path = root / "configs" / "experiments" / "pilot.yaml"
+    from alpha.services.experiment_matrix import load_pilot_config
+
+    pilot = load_pilot_config(str(pilot_path))
+    assert pilot.agent_provider in {"openai", "ollama"}
+
+
+def test_pilot_scenario_count_unchanged():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pilot_path = root / "configs" / "experiments" / "pilot.yaml"
+    from alpha.services.experiment_matrix import generate_pilot_scenarios, load_pilot_config
+
+    pilot = load_pilot_config(str(pilot_path))
+    scenarios = generate_pilot_scenarios(pilot)
+    assert len(scenarios) == 70  # 5 control + 4*3*5 faults + 5 concurrent
+
+
+def test_pilot_config_has_ollama_base_url():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pilot_path = root / "configs" / "experiments" / "pilot.yaml"
+    from alpha.services.experiment_matrix import load_pilot_config
+
+    pilot = load_pilot_config(str(pilot_path))
+    if pilot.agent_provider == "ollama":
+        assert pilot.ollama_base_url is not None
+        assert pilot.ollama_base_url.startswith("http")

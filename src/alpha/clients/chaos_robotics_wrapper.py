@@ -58,7 +58,7 @@ class ChaosRoboticsWrapper(SimulatorClient):
         Chaos experiment configuration describing faults, triggers, and intensity.
     """
 
-    def __init__(self, inner: SimulatorClient, config: ChaosConfig | None = None) -> None:
+    def __init__(self, inner: SimulatorClient, config: ChaosConfig | None = None, safety_monitor: Any = None) -> None:
         self._inner = inner
         self.config = config or ChaosConfig()
         self._rng = random.Random(self.config.seed)
@@ -70,6 +70,7 @@ class ChaosRoboticsWrapper(SimulatorClient):
         self._armed_faults: set[FaultType] = set()
         self._latched_single_fault: FaultType | None = None
         self._episode_started_at = time.monotonic()
+        self._safety_monitor = safety_monitor
 
     # ------------------------------------------------------------------
     # Runtime context API (call from orchestration layer, not from agent)
@@ -128,6 +129,11 @@ class ChaosRoboticsWrapper(SimulatorClient):
     def move_end_effector(self, target_pos: Vec3, target_orn: Any = None) -> dict[str, Any]:
         requested = target_pos
         executed = self._maybe_inject_unreachable_ik(target_pos)
+        
+        # Inject grip_slip during move operation if we're in lift phase
+        if self._grip_active and self._context.phase == "lift":
+            self._maybe_inject_grip_slip()
+        
         result = self._inner.move_end_effector(executed, target_orn)
         result["requested_target"] = requested
         result["executed_target"] = executed
@@ -138,6 +144,8 @@ class ChaosRoboticsWrapper(SimulatorClient):
         if handle is not None:
             self._grip_handle = handle
             self._grip_active = True
+            if self._safety_monitor is not None:
+                self._safety_monitor.set_gripped(color, gripped=True)
         return handle
 
     def release(self, grip_handle: Any) -> None:
@@ -147,6 +155,12 @@ class ChaosRoboticsWrapper(SimulatorClient):
         if grip_handle == self._grip_handle:
             self._grip_handle = None
             self._grip_active = False
+            if self._safety_monitor is not None:
+                # Find which block was gripped and mark as released
+                for color in [BlockColor.RED, BlockColor.GREEN, BlockColor.BLUE]:
+                    if self._safety_monitor._gripped_blocks.intersection({color.value}):
+                        self._safety_monitor.set_gripped(color, gripped=False)
+                        break
 
     # ------------------------------------------------------------------
     # Agent-boundary hooks (Brain/Body planner remains untouched)

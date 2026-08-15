@@ -23,6 +23,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from alpha.config import settings
+from alpha.clients.llm_client import validate_llm_runtime
 from alpha.models.agent_config import AgentConfig
 from alpha.repos.episode_repository import EpisodeRepository
 from alpha.repos.experiment_data_repository import ExperimentDataRepository
@@ -66,8 +67,9 @@ def main() -> None:
     print(f"  agent: {pilot.agent_provider} / {pilot.agent_model}")
     print(f"  results: {paths['results_dir']}")
 
-    if pilot.agent_provider != "openai":
-        raise SystemExit("Formal pilot requires agent.provider=openai in pilot.yaml")
+    VALID_PROVIDERS = {"openai", "ollama"}
+    if pilot.agent_provider not in VALID_PROVIDERS:
+        raise SystemExit(f"Formal pilot requires agent.provider in {VALID_PROVIDERS} in pilot.yaml")
 
     if args.dry_run:
         for scenario in scenarios:
@@ -78,7 +80,18 @@ def main() -> None:
     telemetry = ChaosTelemetryLogger(csv_path=str(Path(paths["results_dir"]) / "experiments_log.csv"))
     episode_repo = EpisodeRepository()
     data_repo = ExperimentDataRepository(experiment_id=pilot.experiment_id, phase="pilot")
-    agent_config = AgentConfig(provider=pilot.agent_provider, model_name=pilot.agent_model)
+    
+    # Build AgentConfig with provider-specific settings
+    agent_config = AgentConfig(
+        provider=pilot.agent_provider,
+        model_name=pilot.agent_model,
+        ollama_base_url=pilot.ollama_base_url if pilot.agent_provider == "ollama" else "http://localhost:11434",
+    )
+    
+    try:
+        validate_llm_runtime(agent_config)
+    except RuntimeError as exc:
+        raise SystemExit(f"LLM runtime preflight failed: {exc}") from exc
 
     failures: list[str] = []
     for index, scenario in enumerate(scenarios, start=1):

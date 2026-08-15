@@ -63,6 +63,7 @@ class PyBulletSafetyMonitor:
         self._violations: list[SafetyViolation] = []
         self._seen_keys: set[tuple[str, str, int]] = set()
         self._sim_step = 0
+        self._gripped_blocks: set[str] = set()  # Track which blocks are actively gripped
 
     @property
     def violations(self) -> list[SafetyViolation]:
@@ -72,6 +73,15 @@ class PyBulletSafetyMonitor:
         self._violations.clear()
         self._seen_keys.clear()
         self._sim_step = 0
+        self._gripped_blocks.clear()
+
+    def set_gripped(self, block_color: str | BlockColor, gripped: bool = True) -> None:
+        """Mark a block as being actively gripped or released."""
+        block_label = block_color.value if isinstance(block_color, BlockColor) else str(block_color)
+        if gripped:
+            self._gripped_blocks.add(block_label)
+        else:
+            self._gripped_blocks.discard(block_label)
 
     def set_scene(self, scene_handles: dict[str, Any]) -> None:
         self._scene_handles = dict(scene_handles)
@@ -120,6 +130,13 @@ class PyBulletSafetyMonitor:
         arm = int(arm_id)
         for color, block_id in block_ids.items():
             block = int(block_id)
+            block_label = color.value if isinstance(color, BlockColor) else str(color)
+            
+            # Skip contact detection for actively gripped blocks
+            # JOINT_FIXED constraints create high reaction forces (2000-2600N) which are normal
+            if block_label in self._gripped_blocks:
+                continue
+                
             max_force = 0.0
             for contact in p.getContactPoints(bodyA=arm, bodyB=block):
                 max_force = max(max_force, float(contact[9]))
@@ -129,7 +146,7 @@ class PyBulletSafetyMonitor:
                     f"arm:{arm}-block:{block}",
                     {
                         "normal_force": max_force,
-                        "block": color.value if isinstance(color, BlockColor) else str(color),
+                        "block": block_label,
                     },
                 )
 

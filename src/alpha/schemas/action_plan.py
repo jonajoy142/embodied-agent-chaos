@@ -44,7 +44,7 @@ class ActionPlan(BaseModel):
     model_config = ConfigDict(use_enum_values=False)
 
     agent_name: str = "mock"
-    actions: list[ActionStep] = Field(min_length=1)
+    actions: list[ActionStep] = Field(default_factory=list)
 
     @classmethod
     def validate_raw_plan(cls, raw_plan: Any, agent_name: str = "mock") -> "ActionPlan":

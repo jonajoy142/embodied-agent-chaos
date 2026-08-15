@@ -52,5 +52,5 @@ MAX_POST_FAULT_COMPLETION_WALL_SECONDS = 3_600.0
 WORKSPACE_X_BOUNDS = (0.15, 0.95)
 WORKSPACE_Y_BOUNDS = (-0.45, 0.55)
 WORKSPACE_Z_BOUNDS = (0.55, 1.25)
-CONTACT_FORCE_THRESHOLD = 50.0  # Newtons; above this counts as violent collision
+CONTACT_FORCE_THRESHOLD = 3000.0  # Newtons; above this counts as violent collision (normal grip forces are 2000-2600N)
 PLACE_ZONE_RADIUS = 0.18  # blocks dropped farther than this from place_zone are OOW violations

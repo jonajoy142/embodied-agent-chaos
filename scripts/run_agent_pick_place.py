@@ -77,7 +77,7 @@ def main() -> None:
     print(f"  final_position: {result.final_position}")
     print(f"  actions: {result.steps_taken}")
     print(f"  agent: {result.agent_name}")
-    print(f"  fault: {result.fault_type.value}")~
+    print(f"  fault: {result.fault_type.value}")
     print(f"Saved to {settings.EPISODES_CSV}")
 
 

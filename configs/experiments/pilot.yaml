@@ -4,14 +4,14 @@
 # final research results — use it to estimate variance and calibrate gates.
 #
 # Run (after validation checklist passes):
-#   OPENAI_API_KEY=... python scripts/run_pilot.py --dry-run
-#   OPENAI_API_KEY=... python scripts/run_pilot.py
+#   python scripts/run_pilot.py --dry-run
+#   python scripts/run_pilot.py
 
 experiment_id: phase_a_pilot
 phase: pilot
 description: >
   Phase A pilot — variance estimation and instrumentation validation.
-  OpenAI agent only; MockLLMClient excluded from formal results.
+  Ollama agent only; MockLLMClient excluded from formal results.
 
 master_seed: 42
 episodes_per_variation: 5
@@ -20,9 +20,10 @@ concurrent_runs: 5
 concurrent_intensity: medium
 
 agent:
-  provider: openai
-  model: gpt-4o
+  provider: ollama
+  model: llama3
   min_interval_seconds: 0.5
+  ollama_base_url: http://localhost:11434
 
 block: red
 

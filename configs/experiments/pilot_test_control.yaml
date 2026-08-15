@@ -1,0 +1,34 @@
+# Test pilot for single control episode validation
+
+experiment_id: test_control_pilot
+phase: pilot
+description: >
+  Test pilot for single control episode validation using Ollama.
+
+master_seed: 42
+episodes_per_variation: 1
+control_runs: 1
+concurrent_runs: 0
+concurrent_intensity: medium
+
+agent:
+  provider: ollama
+  model: llama3
+  min_interval_seconds: 0.5
+  ollama_base_url: http://localhost:11434
+
+block: red
+
+intensities:
+  - low
+
+conditions:
+  - id: CONTROL
+    group: control
+    fault_type: none
+    intensities: [none]
+
+output:
+  results_dir: results/test_pilot
+  raw_data_dir: data/raw/test_pilot
+  processed_data_dir: data/processed/test_pilot

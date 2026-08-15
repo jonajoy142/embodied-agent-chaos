@@ -59,6 +59,44 @@ class AgentService:
         except ValidationError:
             raise
 
+        # Handle empty action plan as controlled planner failure
+        if not plan.actions:
+            fault_injector = self.control_service.fault_injector
+            if hooks is not None and hooks.fault_events_provider is not None:
+                fault_log = hooks.fault_events_provider()
+                fault_type = hooks.fault_type
+                fault_seed = hooks.fault_seed
+            elif fault_injector is not None:
+                fault_log = fault_injector.event_log()
+                fault_type = fault_injector.fault_type
+                fault_seed = fault_injector.seed
+            else:
+                fault_log = []
+                fault_type = FaultType.NONE
+                fault_seed = None
+            fault_occurred = any(event.get("fault_applied") for event in fault_log)
+            
+            return EpisodeResult(
+                task=task,
+                success=False,
+                final_error=float('inf'),  # Use infinity to indicate planner failure
+                final_position=(0.0, 0.0, 0.0),  # Default position when no execution occurs
+                fault_type=fault_type,
+                steps_taken=0,
+                agent_name=plan.agent_name,
+                action_plan_json=json.dumps(plan.model_dump(mode="json")),
+                execution_log_json=json.dumps(
+                    {
+                        "actions": [],
+                        "fault_events": fault_log,
+                    },
+                    default=str,
+                ),
+                fault_occurred=fault_occurred,
+                fault_seed=fault_seed,
+                notes="planner_output_corruption",  # Specific failure reason for F4
+            )
+
         execution_log: list[dict[str, Any]] = []
         grip_handle = None
 
@@ -93,6 +131,9 @@ class AgentService:
             elif step.action == ActionType.RELEASE:
                 self.control_service.release(grip_handle)
                 execution_log.append({"index": index, "action": step.action.value})
+
+            if hooks is not None and hooks.on_after_action is not None:
+                hooks.on_after_action(index, step, grip_handle)
 
         self.simulator.step(60)
         success, final_error, final_position = self.control_service.evaluate_task(task)

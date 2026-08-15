@@ -4,10 +4,11 @@ Rewrite of matrix episode runner using ``AgentService.run_task`` hooks.
 
 from __future__ import annotations
 
+import traceback
 from typing import Any
 
 from alpha.clients.chaos_robotics_wrapper import ChaosRoboticsWrapper, PyBulletChaosRoboticsWrapper
-from alpha.clients.experiment_llm_clients import ChaosPlannerLLMClient, RateLimitedLLMClient
+from alpha.clients.experiment_llm_clients import ChaosPlannerLLMClient, RateLimitedLLMClient, TelemetryLLMClient
 from alpha.clients.llm_client import LLMClient, build_llm_client
 from alpha.clients.safety_monitor import PyBulletSafetyMonitor
 from alpha.clients.simulator_client import PyBulletSimulatorClient
@@ -56,8 +57,12 @@ def execute_matrix_episode(
     chaos_wrapper: ChaosRoboticsWrapper | None = None
     chaos_config: ChaosConfig | None = None
 
+    safety_monitor = PyBulletSafetyMonitor()
+
     if scenario.scenario_group == "control":
-        simulator: SimulatorClient = inner
+        # Use minimal chaos wrapper for control to enable safety monitor grip tracking
+        chaos_wrapper = ChaosRoboticsWrapper(inner, ChaosConfig(), safety_monitor)
+        simulator = chaos_wrapper
     else:
         if scenario.concurrent:
             chaos_config = build_chaos_config(
@@ -73,10 +78,9 @@ def execute_matrix_episode(
                 episode_seed=episode_seed,
                 concurrent=False,
             )
-        chaos_wrapper = PyBulletChaosRoboticsWrapper(inner, chaos_config)
+        chaos_wrapper = PyBulletChaosRoboticsWrapper(inner, chaos_config, safety_monitor)
         simulator = chaos_wrapper
 
-    safety_monitor = PyBulletSafetyMonitor()
     instrumented = TelemetrySimulatorWrapper(simulator, telemetry, safety_monitor)
 
     scene_service = SceneService(instrumented)
@@ -88,6 +92,7 @@ def execute_matrix_episode(
         build_llm_client(agent_config),
         min_interval_seconds=llm_min_interval,
     )
+    llm_client = TelemetryLLMClient(llm_client, telemetry)
     if chaos_wrapper is not None and _needs_planner_wrapper(scenario, chaos_config):
         llm_client = ChaosPlannerLLMClient(llm_client, chaos_wrapper)
 
@@ -128,7 +133,7 @@ def execute_matrix_episode(
         result = agent_service.run_task(task, scene_info, hooks=hooks)
     except Exception as exc:
         crashed = True
-        failure_reason = f"exception:{type(exc).__name__}"
+        failure_reason = _format_exception_failure(exc)
     finally:
         if chaos_wrapper is not None:
             telemetry.ingest_fault_events(chaos_wrapper.event_log())
@@ -155,6 +160,20 @@ def execute_matrix_episode(
     return result, record
 
 
+def _format_exception_failure(exc: Exception) -> str:
+    summary = f"exception:{type(exc).__name__}"
+    message = str(exc).strip().replace("\n", " ")
+    if message:
+        summary = f"{summary}: {message}"
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    if frames:
+        frame = frames[-1]
+        summary = f"{summary} @ {frame.filename}:{frame.lineno}"
+
+    return summary[:1000]
+
+
 def _build_hooks(chaos_wrapper: ChaosRoboticsWrapper | None, fault_seed: int) -> AgentRunHooks | None:
     if chaos_wrapper is None:
         return None
@@ -162,14 +181,18 @@ def _build_hooks(chaos_wrapper: ChaosRoboticsWrapper | None, fault_seed: int) ->
     def on_before_action(index: int, step, grip_handle) -> None:
         if step.action == ActionType.GRIP:
             chaos_wrapper.set_phase("pick")
-        elif grip_handle is not None and step.action == ActionType.MOVE_TO:
-            chaos_wrapper.set_phase("lift")
         elif step.action == ActionType.RELEASE:
             chaos_wrapper.set_phase("place")
         chaos_wrapper.advance_event_step(index)
 
+    def on_after_action(index: int, step, grip_handle) -> None:
+        # After GRIP succeeds, set lift phase for subsequent MOVE_TO actions
+        if step.action == ActionType.GRIP and grip_handle is not None:
+            chaos_wrapper.set_phase("lift")
+
     return AgentRunHooks(
         on_before_action=on_before_action,
+        on_after_action=on_after_action,
         fault_events_provider=chaos_wrapper.event_log,
         fault_type=_fault_type_from_wrapper(chaos_wrapper),
         fault_seed=fault_seed,

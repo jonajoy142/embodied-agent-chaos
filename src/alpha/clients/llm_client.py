@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import importlib.util
 from abc import ABC, abstractmethod
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -144,12 +145,20 @@ class OpenAIActionPlanClient(LLMClient):
 
     def __init__(self, config: AgentConfig) -> None:
         self.config = config
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
 
         self.api_key = os.getenv(config.api_key_env_var)
 
         if not self.api_key:
             raise RuntimeError(
                 f"{config.api_key_env_var} is not set"
+            )
+
+        if importlib.util.find_spec("openai") is None:
+            raise RuntimeError(
+                "Install the optional 'openai' package "
+                "to use --agent openai."
             )
 
     def generate_action_plan(
@@ -171,12 +180,14 @@ class OpenAIActionPlanClient(LLMClient):
         prompt = _build_robot_prompt(
             task=task,
             scene_info=scene_info,
+            agent_name=self.name,
         )
 
         response = client.responses.create(
             model=self.config.model_name,
             input=prompt,
         )
+        self._record_usage(response)
 
         raw_text = response.output_text
 
@@ -190,6 +201,22 @@ class OpenAIActionPlanClient(LLMClient):
         return plan.model_copy(
             update={"agent_name": self.name}
         )
+
+    def _record_usage(self, response: Any) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            self.last_prompt_tokens = 0
+            self.last_completion_tokens = 0
+            return
+
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        if isinstance(usage, dict):
+            input_tokens = usage.get("input_tokens", input_tokens)
+            output_tokens = usage.get("output_tokens", output_tokens)
+
+        self.last_prompt_tokens = int(input_tokens or 0)
+        self.last_completion_tokens = int(output_tokens or 0)
 
 
 class OllamaActionPlanClient(LLMClient):
@@ -210,11 +237,13 @@ class OllamaActionPlanClient(LLMClient):
 
     def __init__(self, config: AgentConfig) -> None:
         self.config = config
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
 
         # Allow explicit environment override.
         self.base_url = os.getenv(
             "OLLAMA_BASE_URL",
-            "http://localhost:11434",
+            config.ollama_base_url,
         ).rstrip("/")
 
         # Model can be configured through OLLAMA_MODEL.
@@ -243,6 +272,7 @@ class OllamaActionPlanClient(LLMClient):
         prompt = _build_robot_prompt(
             task=task,
             scene_info=scene_info,
+            agent_name=self.name,
         )
 
         payload = {
@@ -273,6 +303,7 @@ class OllamaActionPlanClient(LLMClient):
         }
 
         response_data = self._request_ollama(payload)
+        self._record_usage(response_data)
 
         raw_text = _extract_ollama_text(response_data)
 
@@ -286,6 +317,10 @@ class OllamaActionPlanClient(LLMClient):
         return plan.model_copy(
             update={"agent_name": self.name}
         )
+
+    def _record_usage(self, response_data: dict[str, Any]) -> None:
+        self.last_prompt_tokens = int(response_data.get("prompt_eval_count") or 0)
+        self.last_completion_tokens = int(response_data.get("eval_count") or 0)
 
     def _request_ollama(
         self,
@@ -344,6 +379,7 @@ class OllamaActionPlanClient(LLMClient):
 def _build_robot_prompt(
     task: TaskSpec,
     scene_info: dict[str, Any] | None = None,
+    agent_name: str = "llm",
 ) -> str:
     """
     Build the same planning prompt for OpenAI and Ollama.
@@ -351,6 +387,27 @@ def _build_robot_prompt(
     The model is intentionally restricted to three action types:
     MOVE_TO, GRIP, RELEASE.
     """
+    block_position = _block_position_from_scene(task, scene_info)
+    above_block = (
+        block_position[0],
+        block_position[1],
+        block_position[2] + 0.15,
+    )
+    grasp_position = (
+        block_position[0],
+        block_position[1],
+        block_position[2] + 0.02,
+    )
+    above_place = (
+        task.place_zone[0],
+        task.place_zone[1],
+        task.place_zone[2] + 0.15,
+    )
+    release_position = (
+        task.place_zone[0],
+        task.place_zone[1],
+        task.place_zone[2] + settings.PLACE_RELEASE_HEIGHT_OFFSET,
+    )
 
     return f"""
 You are the Brain for a robot pick-and-place task.
@@ -364,6 +421,16 @@ Task:
 
 Scene information:
 {scene_info or {}}
+
+Use this canonical pick-and-place sequence:
+
+1. Move above the {task.block.value} block at {above_block}.
+2. Move down to grasp the {task.block.value} block at {grasp_position}.
+3. Grip the {task.block.value} block.
+4. Lift back above the {task.block.value} block at {above_block}.
+5. Move above the place zone at {above_place}.
+6. Move to the release position at {release_position}.
+7. Release the block.
 
 Allowed actions ONLY:
 
@@ -381,11 +448,15 @@ Allowed actions ONLY:
 Return ONLY a JSON object with this structure:
 
 {{
-  "agent_name": "ollama",
+  "agent_name": "{agent_name}",
   "actions": [
     {{
       "action": "MOVE_TO",
-      "target": [x, y, z]
+      "target": {list(above_block)}
+    }},
+    {{
+      "action": "MOVE_TO",
+      "target": {list(grasp_position)}
     }},
     {{
       "action": "GRIP",
@@ -393,7 +464,15 @@ Return ONLY a JSON object with this structure:
     }},
     {{
       "action": "MOVE_TO",
-      "target": [x, y, z]
+      "target": {list(above_block)}
+    }},
+    {{
+      "action": "MOVE_TO",
+      "target": {list(above_place)}
+    }},
+    {{
+      "action": "MOVE_TO",
+      "target": {list(release_position)}
     }},
     {{
       "action": "RELEASE"
@@ -411,6 +490,18 @@ Rules:
 - Use numeric x, y, z coordinates.
 - The final action should release the block.
 """.strip()
+
+
+def _block_position_from_scene(
+    task: TaskSpec,
+    scene_info: dict[str, Any] | None,
+) -> tuple[float, float, float]:
+    blocks = (scene_info or {}).get("blocks", {})
+    if isinstance(blocks, dict):
+        position = blocks.get(task.block.value) or blocks.get(task.block)
+        if isinstance(position, (list, tuple)) and len(position) == 3:
+            return (float(position[0]), float(position[1]), float(position[2]))
+    return settings.BLOCK_SPAWN_POSITIONS[task.block]
 
 
 def _extract_ollama_text(
@@ -521,6 +612,11 @@ def build_llm_client(
     raise ValueError(
         f"Unsupported agent provider: {config.provider}"
     )
+
+
+def validate_llm_runtime(config: AgentConfig) -> None:
+    """Fail fast when the configured LLM provider cannot run."""
+    build_llm_client(config)
 
 
 # Backward-compatible alias.

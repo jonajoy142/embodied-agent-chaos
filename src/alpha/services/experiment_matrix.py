@@ -429,6 +429,7 @@ class PilotConfig:
     llm_min_interval: float
     block: str
     results_dir: str
+    ollama_base_url: str = "http://localhost:11434"
 
 
 def load_pilot_config(path: str) -> PilotConfig:
@@ -449,6 +450,7 @@ def load_pilot_config(path: str) -> PilotConfig:
         llm_min_interval=float(agent.get("min_interval_seconds", 0.5)),
         block=str(payload.get("block", "red")),
         results_dir=str(output.get("results_dir", settings.PILOT_RESULTS_DIR)),
+        ollama_base_url=str(agent.get("ollama_base_url", "http://localhost:11434")),
     )
 
 
