@@ -43,6 +43,10 @@ class SimulatorClient(ABC):
     @abstractmethod
     def release(self, grip_handle: Any) -> None: ...
 
+    @abstractmethod
+    def observe(self) -> dict[str, Any]:
+        """Return current scene observation (block positions, etc.)."""
+
 
 class AgentPlanner(ABC):
     """Contract for the Week 2 Brain.

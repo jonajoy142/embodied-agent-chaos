@@ -496,11 +496,16 @@ def _block_position_from_scene(
     task: TaskSpec,
     scene_info: dict[str, Any] | None,
 ) -> tuple[float, float, float]:
-    blocks = (scene_info or {}).get("blocks", {})
-    if isinstance(blocks, dict):
-        position = blocks.get(task.block.value) or blocks.get(task.block)
-        if isinstance(position, (list, tuple)) and len(position) == 3:
-            return (float(position[0]), float(position[1]), float(position[2]))
+    payload = scene_info or {}
+    blocks = payload.get("blocks", {})
+    if not isinstance(blocks, dict):
+        blocks = {}
+    position = blocks.get(task.block.value) or blocks.get(task.block)
+    if position is None:
+        # Flat color -> position maps from simulator.observe().
+        position = payload.get(task.block.value) or payload.get(task.block)
+    if isinstance(position, (list, tuple)) and len(position) == 3:
+        return (float(position[0]), float(position[1]), float(position[2]))
     return settings.BLOCK_SPAWN_POSITIONS[task.block]
 
 

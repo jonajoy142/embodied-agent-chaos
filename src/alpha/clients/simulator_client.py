@@ -74,6 +74,12 @@ class PyBulletSimulatorClient(SimulatorClient):
         return BlockState(color=color, position=pos, orientation=orn)
 
     def move_end_effector(self, target_pos: Vec3, target_orn: Any = None) -> dict[str, Any]:
+        self.set_end_effector_target(target_pos, target_orn)
+        self.step(settings.MOVE_STEPS)
+        return self.end_effector_tracking_result(target_pos)
+
+    def set_end_effector_target(self, target_pos: Vec3, target_orn: Any = None) -> None:
+        """Apply IK setpoints without stepping — enables wrappers to sample mid-move."""
         if self._arm_id is None or self._end_effector_link is None:
             raise SimulationError("build_scene() must be called before move_end_effector()")
 
@@ -102,8 +108,9 @@ class PyBulletSimulatorClient(SimulatorClient):
                 velocityGain=1.0,
             )
 
-        self.step(settings.MOVE_STEPS)
-
+    def end_effector_tracking_result(self, target_pos: Vec3) -> dict[str, Any]:
+        if self._arm_id is None or self._end_effector_link is None:
+            raise SimulationError("build_scene() must be called before move_end_effector()")
         ee_state = p.getLinkState(self._arm_id, self._end_effector_link)
         reached_pos = ee_state[0]
         error = sum((a - b) ** 2 for a, b in zip(reached_pos, target_pos)) ** 0.5
@@ -125,3 +132,11 @@ class PyBulletSimulatorClient(SimulatorClient):
 
     def release(self, grip_handle: Any) -> None:
         p.removeConstraint(grip_handle)
+
+    def observe(self) -> dict[str, Any]:
+        """Return current scene observation with block positions."""
+        observation = {}
+        for color, block_id in self._block_ids.items():
+            pos, orn = p.getBasePositionAndOrientation(block_id)
+            observation[color.value] = pos
+        return observation

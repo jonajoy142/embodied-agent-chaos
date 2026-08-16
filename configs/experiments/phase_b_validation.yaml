@@ -1,0 +1,51 @@
+# Phase B validation experiment
+# Purpose: Validate repeated observation path and F3 unique incident metrics
+# Total episodes: 21 (3 control + 9 F1 + 9 F3)
+
+experiment_id: phase_b_validation
+phase: phase_b
+description: >
+  Phase B validation experiment to test:
+  1. Repeated observation/replanning path for F1 sensor lag
+  2. Unique safety incident tracking for F3 unreachable IK
+  3. New metrics for observation lag and safety incidents
+
+master_seed: 42
+episodes_per_variation: 3
+control_runs: 3
+concurrent_runs: 0
+concurrent_intensity: medium
+
+agent:
+  provider: ollama
+  model: llama3
+  min_interval_seconds: 0.5
+  ollama_base_url: http://localhost:11434
+
+block: red
+
+intensities:
+  - low
+  - medium
+  - high
+
+conditions:
+  - id: CONTROL
+    group: control
+    fault_type: none
+    intensities: [none]
+  
+  - id: F1_SENSOR_LAG
+    group: fault_matrix
+    fault_type: sensor_lag
+    intensities: [low, medium, high]
+  
+  - id: F3_UNREACHABLE_IK
+    group: fault_matrix
+    fault_type: unreachable_ik
+    intensities: [low, medium, high]
+
+output:
+  results_dir: results/phase_b
+  raw_data_dir: data/raw/phase_b
+  processed_data_dir: data/processed/phase_b

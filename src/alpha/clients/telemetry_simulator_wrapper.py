@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from alpha.clients.safety_monitor import PyBulletSafetyMonitor
+from alpha.config import settings
 from alpha.core.entities import BlockColor, BlockState, Vec3
 from alpha.core.interfaces import SimulatorClient
 from alpha.services.chaos_telemetry_logger import ChaosTelemetryLogger
@@ -56,10 +57,18 @@ class TelemetrySimulatorWrapper(SimulatorClient):
         return self._inner.get_block_state(color)
 
     def move_end_effector(self, target_pos: Vec3, target_orn: Any = None) -> dict[str, Any]:
-        return self._inner.move_end_effector(target_pos, target_orn)
+        result = self._inner.move_end_effector(target_pos, target_orn)
+        self._telemetry.tick_sim_step(settings.MOVE_STEPS)
+        if self._safety is not None:
+            snapshot = self._safety.scan(sim_step=self._telemetry.sim_step_count)
+            self._telemetry.update_safety(snapshot)
+        return result
 
     def grip(self, color: BlockColor) -> Any:
         return self._inner.grip(color)
 
     def release(self, grip_handle: Any) -> None:
         self._inner.release(grip_handle)
+
+    def observe(self) -> dict[str, Any]:
+        return self._inner.observe()

@@ -24,6 +24,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+from alpha.config import settings
 from alpha.core.entities import BlockColor, BlockState, FaultType, Vec3
 from alpha.core.interfaces import SimulatorClient
 from alpha.models.chaos_config import ChaosConfig, FaultSpec, InjectionMode, TriggerKind
@@ -71,6 +72,13 @@ class ChaosRoboticsWrapper(SimulatorClient):
         self._latched_single_fault: FaultType | None = None
         self._episode_started_at = time.monotonic()
         self._safety_monitor = safety_monitor
+        self._observation_lag_requested = 0.0
+        self._observation_lag_observed = 0.0
+        self._last_observation_meta: dict[str, Any] = {}
+        for spec in self.config.enabled_faults():
+            if spec.fault_type == FaultType.SENSOR_LAG:
+                self._observation_lag_requested = float(spec.intensity.lag_seconds)
+                break
 
     # ------------------------------------------------------------------
     # Runtime context API (call from orchestration layer, not from agent)
@@ -94,6 +102,15 @@ class ChaosRoboticsWrapper(SimulatorClient):
     def event_log(self) -> list[dict[str, Any]]:
         """Structured record of injected faults for metrics / episode logs."""
         return list(self._events)
+
+    def observation_lag_metrics(self) -> tuple[float, float]:
+        """Return configured F1 lag and max observed lag from applied observations."""
+        return self._observation_lag_requested, self._observation_lag_observed
+
+    @property
+    def last_observation_meta(self) -> dict[str, Any]:
+        """Timing diagnostics for the most recent ``wrap_observation`` call."""
+        return dict(self._last_observation_meta)
 
     @property
     def grip_is_active(self) -> bool:
@@ -129,12 +146,26 @@ class ChaosRoboticsWrapper(SimulatorClient):
     def move_end_effector(self, target_pos: Vec3, target_orn: Any = None) -> dict[str, Any]:
         requested = target_pos
         executed = self._maybe_inject_unreachable_ik(target_pos)
-        
+
         # Inject grip_slip during move operation if we're in lift phase
         if self._grip_active and self._context.phase == "lift":
             self._maybe_inject_grip_slip()
-        
-        result = self._inner.move_end_effector(executed, target_orn)
+
+        if hasattr(self._inner, "set_end_effector_target") and hasattr(self._inner, "end_effector_tracking_result"):
+            self._inner.set_end_effector_target(executed, target_orn)
+            # Sample often enough that observed lag can approximate configured lag.
+            sample_period = max(1, int(round(0.05 / max(self.config.sim_timestep, 1e-9))))
+            for step_idx in range(settings.MOVE_STEPS):
+                self.step(1)
+                if step_idx % sample_period == 0:
+                    self._capture_observation_sample()
+            result = self._inner.end_effector_tracking_result(executed)
+        else:
+            result = self._inner.move_end_effector(executed, target_orn)
+            self._context.sim_step_count += settings.MOVE_STEPS
+            self._context.elapsed_seconds += settings.MOVE_STEPS * self.config.sim_timestep
+            self._capture_observation_sample()
+
         result["requested_target"] = requested
         result["executed_target"] = executed
         return result
@@ -162,6 +193,21 @@ class ChaosRoboticsWrapper(SimulatorClient):
                         self._safety_monitor.set_gripped(color, gripped=False)
                         break
 
+    def observe(self) -> dict[str, Any]:
+        """Return current scene observation through inner simulator with F1 fault applied."""
+        raw_observation = self._inner.observe()
+        return self.wrap_observation(raw_observation)
+
+    def _capture_observation_sample(self) -> None:
+        """Append a raw scene snapshot at the current sim time for F1 lag lookup."""
+        try:
+            raw = self._inner.observe()
+        except Exception:
+            return
+        self._observation_history.append(
+            _ObservationSample(timestamp=self._context.elapsed_seconds, state=copy.deepcopy(raw))
+        )
+
     # ------------------------------------------------------------------
     # Agent-boundary hooks (Brain/Body planner remains untouched)
     # ------------------------------------------------------------------
@@ -179,26 +225,62 @@ class ChaosRoboticsWrapper(SimulatorClient):
 
         specs = self._active_specs(FaultType.SENSOR_LAG)
         if not specs:
+            self._last_observation_meta = {
+                "current_timestamp": timestamp,
+                "returned_timestamp": timestamp,
+                "requested_lag": 0.0,
+                "observed_lag": 0.0,
+                "stale": False,
+            }
             return snapshot
 
         spec = specs[0]
+        lag_seconds = float(spec.intensity.lag_seconds)
+        self._observation_lag_requested = lag_seconds
         if not self._should_apply_spec(spec):
+            # Do not wipe a previously measured observed lag when the fault is armed but not applied.
+            self._last_observation_meta = {
+                "current_timestamp": timestamp,
+                "returned_timestamp": timestamp,
+                "requested_lag": lag_seconds,
+                "observed_lag": 0.0,
+                "stale": False,
+            }
             return snapshot
 
-        lag_seconds = spec.intensity.lag_seconds
         cutoff = timestamp - lag_seconds
         delayed = snapshot
-        for sample in reversed(self._observation_history):
+        returned_timestamp = timestamp
+        # Newest sample at or before cutoff (meaningful stale observation).
+        for sample in reversed(self._observation_history[:-1]):
             if sample.timestamp <= cutoff:
                 delayed = copy.deepcopy(sample.state)
+                returned_timestamp = sample.timestamp
                 break
+        else:
+            # Fall back to oldest sample if history is shorter than the lag window.
+            if len(self._observation_history) > 1:
+                oldest = self._observation_history[0]
+                delayed = copy.deepcopy(oldest.state)
+                returned_timestamp = oldest.timestamp
+
+        observed_lag = max(0.0, timestamp - returned_timestamp)
+        self._observation_lag_observed = max(self._observation_lag_observed, observed_lag)
+        self._last_observation_meta = {
+            "current_timestamp": timestamp,
+            "returned_timestamp": returned_timestamp,
+            "requested_lag": lag_seconds,
+            "observed_lag": observed_lag,
+            "stale": returned_timestamp < timestamp,
+        }
 
         self._record_event(
             fault_type=FaultType.SENSOR_LAG,
             hook="wrap_observation",
             fault_applied=True,
             lag_seconds=lag_seconds,
-            returned_timestamp=cutoff,
+            returned_timestamp=returned_timestamp,
+            observed_lag_seconds=observed_lag,
         )
         return delayed
 

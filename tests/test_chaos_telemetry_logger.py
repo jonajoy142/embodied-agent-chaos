@@ -114,13 +114,26 @@ def test_safety_violation_counts_are_logged(telemetry_csv: str):
     logger = ChaosTelemetryLogger(csv_path=telemetry_csv)
     logger.begin_episode(block="red")
     logger.update_safety(
-        SafetySnapshot(violation_count=3, violent_collision_count=2, out_of_workspace_count=1)
+        SafetySnapshot(
+            violation_count=3,
+            violent_collision_count=2,
+            out_of_workspace_count=1,
+            unique_incident_count=1,
+            first_violation_step=4,
+            total_violation_duration_steps=7,
+        )
     )
+    logger.record_observation_lag(requested_lag=1.25, observed_lag=0.8)
     record = logger.finalize_episode(success=False)
 
     assert record.safety_violation_count == 3
     assert record.violent_collision_count == 2
     assert record.out_of_workspace_count == 1
+    assert record.unique_safety_incident_count == 1
+    assert record.first_violation_step == 4
+    assert record.total_violation_duration_steps == 7
+    assert record.observation_lag_requested == pytest.approx(1.25)
+    assert record.observation_lag_observed == pytest.approx(0.8)
 
 
 def test_metrics_service_mean_post_fault_completion_time_and_degradation(telemetry_csv: str):

@@ -87,6 +87,12 @@ class MatrixRunRecord:
     total_wall_seconds: float
     total_sim_steps: int
     fault_occurred: bool
+    unique_safety_incident_count: int = 0
+    raw_safety_observations: int = 0
+    first_violation_step: int | None = None
+    total_violation_duration_steps: int = 0
+    observation_lag_requested: float = 0.0
+    observation_lag_observed: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -94,8 +100,17 @@ class MatrixSummaryRow:
     fault_type: str
     intensity: str
     success_rate: float
+    fault_observed_rate: float
+    crash_rate: float
+    episode_safety_violation_rate: float
     average_post_fault_completion_time: float | None
     safety_violations: float
+    mean_unique_safety_incidents: float
+    mean_raw_safety_observations: float
+    mean_first_violation_step: float | None
+    mean_violation_duration_steps: float
+    mean_observation_lag_requested: float | None
+    mean_observation_lag_observed: float | None
 
 
 def seed_deterministic_environment(master_seed: int) -> None:
@@ -262,6 +277,12 @@ MATRIX_LOG_FIELDS = [
     "total_wall_seconds",
     "total_sim_steps",
     "fault_occurred",
+    "unique_safety_incident_count",
+    "raw_safety_observations",
+    "first_violation_step",
+    "total_violation_duration_steps",
+    "observation_lag_requested",
+    "observation_lag_observed",
 ]
 
 
@@ -284,6 +305,12 @@ def append_matrix_run_log(path: str, record: MatrixRunRecord) -> None:
         "total_wall_seconds": record.total_wall_seconds,
         "total_sim_steps": record.total_sim_steps,
         "fault_occurred": record.fault_occurred,
+        "unique_safety_incident_count": record.unique_safety_incident_count,
+        "raw_safety_observations": record.raw_safety_observations,
+        "first_violation_step": record.first_violation_step,
+        "total_violation_duration_steps": record.total_violation_duration_steps,
+        "observation_lag_requested": record.observation_lag_requested,
+        "observation_lag_observed": record.observation_lag_observed,
     }
     with file_path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=MATRIX_LOG_FIELDS)
@@ -323,6 +350,16 @@ def load_matrix_run_log(path: str) -> list[MatrixRunRecord]:
                     total_wall_seconds=float(row.get("total_wall_seconds") or 0.0),
                     total_sim_steps=int(float(row.get("total_sim_steps") or 0)),
                     fault_occurred=str(row.get("fault_occurred")).lower() in {"1", "true", "yes"},
+                    unique_safety_incident_count=int(float(row.get("unique_safety_incident_count") or 0)),
+                    raw_safety_observations=int(
+                        float(row.get("raw_safety_observations") or row.get("safety_violation_count") or 0)
+                    ),
+                    first_violation_step=(
+                        int(float(row["first_violation_step"])) if row.get("first_violation_step") not in ("", None) else None
+                    ),
+                    total_violation_duration_steps=int(float(row.get("total_violation_duration_steps") or 0)),
+                    observation_lag_requested=float(row.get("observation_lag_requested") or 0.0),
+                    observation_lag_observed=float(row.get("observation_lag_observed") or 0.0),
                 )
             )
     return records
@@ -338,7 +375,17 @@ def summarize_matrix_runs(records: Iterable[MatrixRunRecord]) -> list[MatrixSumm
     summary_rows: list[MatrixSummaryRow] = []
     for (fault_type, intensity), batch in sorted(buckets.items()):
         successes = sum(1 for item in batch if item.success)
+        faults_observed = sum(1 for item in batch if item.fault_occurred)
+        crashes = sum(1 for item in batch if item.crashed)
+        raw_safety_counts = [
+            item.raw_safety_observations if item.raw_safety_observations else item.safety_violation_count
+            for item in batch
+        ]
+        safety_episodes = sum(1 for count in raw_safety_counts if count > 0)
         success_rate = successes / len(batch) if batch else 0.0
+        fault_observed_rate = faults_observed / len(batch) if batch else 0.0
+        crash_rate = crashes / len(batch) if batch else 0.0
+        episode_safety_violation_rate = safety_episodes / len(batch) if batch else 0.0
         finite_pfct = [
             float(item.post_fault_completion_time_sim_steps)
             for item in batch
@@ -346,13 +393,25 @@ def summarize_matrix_runs(records: Iterable[MatrixRunRecord]) -> list[MatrixSumm
         ]
         average_pfct = mean(finite_pfct) if finite_pfct else None
         safety_violations = mean(item.safety_violation_count for item in batch) if batch else 0.0
+        first_violation_steps = [item.first_violation_step for item in batch if item.first_violation_step is not None]
+        lag_requested = [item.observation_lag_requested for item in batch if item.observation_lag_requested > 0]
+        lag_observed = [item.observation_lag_observed for item in batch if item.observation_lag_requested > 0]
         summary_rows.append(
             MatrixSummaryRow(
                 fault_type=fault_type,
                 intensity=intensity,
                 success_rate=success_rate,
+                fault_observed_rate=fault_observed_rate,
+                crash_rate=crash_rate,
+                episode_safety_violation_rate=episode_safety_violation_rate,
                 average_post_fault_completion_time=average_pfct,
                 safety_violations=safety_violations,
+                mean_unique_safety_incidents=mean(item.unique_safety_incident_count for item in batch) if batch else 0.0,
+                mean_raw_safety_observations=mean(raw_safety_counts) if raw_safety_counts else 0.0,
+                mean_first_violation_step=mean(first_violation_steps) if first_violation_steps else None,
+                mean_violation_duration_steps=mean(item.total_violation_duration_steps for item in batch) if batch else 0.0,
+                mean_observation_lag_requested=mean(lag_requested) if lag_requested else None,
+                mean_observation_lag_observed=mean(lag_observed) if lag_observed else None,
             )
         )
     return summary_rows
@@ -368,17 +427,25 @@ def render_summary_markdown(rows: Iterable[MatrixSummaryRow]) -> str:
     lines = [
         "# Experiment Matrix Summary",
         "",
-        "| Fault Type | Intensity | Success Rate | Mean Post-Fault Completion Time (sim steps) | Safety Violations |",
-        "| --- | --- | ---: | ---: | ---: |",
+        "| Fault Type | Intensity | Success Rate | Fault Observed Rate | Crash Rate | Episode Safety Violation Rate | Mean Post-Fault Completion Time (sim steps) | Mean Raw Safety Observations | Mean Unique Safety Incidents | Mean First Violation Step | Mean Violation Duration (steps) | Mean Requested F1 Lag | Mean Observed F1 Lag |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         lines.append(
-            "| {fault} | {intensity} | {success:.1%} | {pfct} | {safety:.2f} |".format(
+            "| {fault} | {intensity} | {success:.1%} | {fault_observed:.1%} | {crash:.1%} | {episode_safety:.1%} | {pfct} | {raw_safety:.2f} | {unique_safety:.2f} | {first_violation} | {duration:.2f} | {lag_requested} | {lag_observed} |".format(
                 fault=row.fault_type,
                 intensity=row.intensity,
                 success=row.success_rate,
+                fault_observed=row.fault_observed_rate,
+                crash=row.crash_rate,
+                episode_safety=row.episode_safety_violation_rate,
                 pfct=format_post_fault_completion_time(row.average_post_fault_completion_time),
-                safety=row.safety_violations,
+                raw_safety=row.mean_raw_safety_observations,
+                unique_safety=row.mean_unique_safety_incidents,
+                first_violation=format_post_fault_completion_time(row.mean_first_violation_step),
+                duration=row.mean_violation_duration_steps,
+                lag_requested=format_post_fault_completion_time(row.mean_observation_lag_requested),
+                lag_observed=format_post_fault_completion_time(row.mean_observation_lag_observed),
             )
         )
     lines.append("")
@@ -404,6 +471,12 @@ def matrix_run_record_from_telemetry(
         total_wall_seconds=telemetry_record.total_wall_seconds,
         total_sim_steps=telemetry_record.total_sim_steps,
         fault_occurred=telemetry_record.fault_occurred,
+        unique_safety_incident_count=telemetry_record.unique_safety_incident_count,
+        raw_safety_observations=telemetry_record.safety_violation_count,
+        first_violation_step=telemetry_record.first_violation_step,
+        total_violation_duration_steps=telemetry_record.total_violation_duration_steps,
+        observation_lag_requested=telemetry_record.observation_lag_requested,
+        observation_lag_observed=telemetry_record.observation_lag_observed,
     )
 
 
@@ -464,6 +537,16 @@ def pilot_paths(pilot: PilotConfig) -> dict[str, str]:
     }
 
 
+def phase_b_validation_paths(config: PilotConfig) -> dict[str, str]:
+    base = config.results_dir
+    return {
+        "results_dir": base,
+        "matrix_log": os.path.join(base, "experiment_matrix_runs.csv"),
+        "checkpoint": os.path.join(base, "phase_b_validation_checkpoint.json"),
+        "summary": os.path.join(base, "phase_b_validation_summary.md"),
+    }
+
+
 def generate_pilot_scenarios(pilot: PilotConfig) -> list[MatrixScenario]:
     """Build the Phase A pilot schedule from ``configs/experiments/pilot.yaml``."""
     return generate_matrix_scenarios(
@@ -472,3 +555,36 @@ def generate_pilot_scenarios(pilot: PilotConfig) -> list[MatrixScenario]:
         episodes_per_variation=pilot.episodes_per_variation,
         concurrent_runs=pilot.concurrent_runs,
     )
+
+
+def generate_phase_b_validation_scenarios(config: PilotConfig) -> list[MatrixScenario]:
+    """Build the 21-episode Phase B validation schedule without changing Phase A."""
+    scenarios: list[MatrixScenario] = []
+    for index in range(config.control_runs):
+        scenarios.append(
+            MatrixScenario(
+                run_id=f"phase_b_control_{index:03d}",
+                scenario_group="control",
+                fault_type="none",
+                intensity_label="none",
+                intensity_value=0.0,
+                episode_index=index,
+                master_seed=config.master_seed,
+            )
+        )
+
+    for fault_type in (FaultType.SENSOR_LAG, FaultType.UNREACHABLE_IK):
+        for label in IntensityLabel:
+            for index in range(config.episodes_per_variation):
+                scenarios.append(
+                    MatrixScenario(
+                        run_id=f"phase_b_{fault_type.value}_{label.value}_{index:03d}",
+                        scenario_group="fault_matrix",
+                        fault_type=fault_type.value,
+                        intensity_label=label.value,
+                        intensity_value=INTENSITY_SCALAR[label],
+                        episode_index=index,
+                        master_seed=config.master_seed,
+                    )
+                )
+    return scenarios

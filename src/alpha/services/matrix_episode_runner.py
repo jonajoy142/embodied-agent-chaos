@@ -22,7 +22,7 @@ from alpha.repos.episode_repository import EpisodeRepository
 from alpha.repos.experiment_data_repository import ExperimentDataRepository
 from alpha.schemas.telemetry import ExperimentTelemetryRecord
 from alpha.services.agent_hooks import AgentRunHooks
-from alpha.services.agent_service import AgentBrain, AgentService
+from alpha.services.agent_service import REPLANNING_TIMEOUT_REASON, AgentBrain, AgentService
 from alpha.services.chaos_telemetry_logger import ChaosTelemetryLogger
 from alpha.services.control_service import ControlService
 from alpha.services.experiment_matrix import (
@@ -48,6 +48,9 @@ def execute_matrix_episode(
     llm_min_interval: float = 0.5,
     master_seed: int | None = None,
     model_identifier: str = "",
+    enable_replanning: bool = False,
+    replanning_chunk_size: int = 3,
+    max_replanning_attempts: int | None = None,
 ) -> tuple[Any | None, ExperimentTelemetryRecord]:
     """Run one matrix scenario through the canonical ``AgentService`` path."""
     seed_deterministic_environment(master_seed or scenario.master_seed)
@@ -124,24 +127,43 @@ def execute_matrix_episode(
         fault_trigger=fault_trigger,
     )
 
-    hooks = _build_hooks(chaos_wrapper, episode_seed)
+    replan_limit = (
+        agent_config.max_replanning_attempts
+        if max_replanning_attempts is None
+        else max_replanning_attempts
+    )
+    hooks = _build_hooks(chaos_wrapper, episode_seed, telemetry=telemetry)
 
     result = None
     crashed = False
+    timed_out = False
     failure_reason = ""
     try:
-        result = agent_service.run_task(task, scene_info, hooks=hooks)
+        result = agent_service.run_task(
+            task,
+            scene_info,
+            hooks=hooks,
+            enable_replanning=enable_replanning,
+            replanning_chunk_size=replanning_chunk_size,
+            max_replanning_attempts=replan_limit,
+        )
     except Exception as exc:
         crashed = True
         failure_reason = _format_exception_failure(exc)
     finally:
         if chaos_wrapper is not None:
             telemetry.ingest_fault_events(chaos_wrapper.event_log())
-        if result is not None and not result.success and not failure_reason:
+            requested_lag, observed_lag = chaos_wrapper.observation_lag_metrics()
+            telemetry.record_observation_lag(requested_lag=requested_lag, observed_lag=observed_lag)
+        if result is not None and result.notes == REPLANNING_TIMEOUT_REASON:
+            timed_out = True
+            failure_reason = REPLANNING_TIMEOUT_REASON
+        elif result is not None and not result.success and not failure_reason:
             failure_reason = "task_failed"
         record = telemetry.finalize_episode(
             success=bool(result and result.success),
             crashed=crashed,
+            timed_out=timed_out,
             episode_result=result,
             failure_reason=failure_reason,
         )
@@ -174,7 +196,12 @@ def _format_exception_failure(exc: Exception) -> str:
     return summary[:1000]
 
 
-def _build_hooks(chaos_wrapper: ChaosRoboticsWrapper | None, fault_seed: int) -> AgentRunHooks | None:
+def _build_hooks(
+    chaos_wrapper: ChaosRoboticsWrapper | None,
+    fault_seed: int,
+    *,
+    telemetry: ChaosTelemetryLogger | None = None,
+) -> AgentRunHooks | None:
     if chaos_wrapper is None:
         return None
 
@@ -190,9 +217,14 @@ def _build_hooks(chaos_wrapper: ChaosRoboticsWrapper | None, fault_seed: int) ->
         if step.action == ActionType.GRIP and grip_handle is not None:
             chaos_wrapper.set_phase("lift")
 
+    def on_replan(replan_count: int, context: dict) -> None:
+        if telemetry is not None:
+            telemetry.record_replan()
+
     return AgentRunHooks(
         on_before_action=on_before_action,
         on_after_action=on_after_action,
+        on_replan=on_replan,
         fault_events_provider=chaos_wrapper.event_log,
         fault_type=_fault_type_from_wrapper(chaos_wrapper),
         fault_seed=fault_seed,

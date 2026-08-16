@@ -67,3 +67,7 @@ class FakeSimulator(SimulatorClient):
     def release(self, grip_handle: Any) -> None:
         self.released = True
         self.gripped = None
+
+    def observe(self) -> dict[str, Any]:
+        """Return current block positions as observation."""
+        return {color.value: pos for color, pos in self.block_positions.items()}

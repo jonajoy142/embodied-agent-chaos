@@ -9,6 +9,7 @@ from alpha.services.experiment_matrix import (
     IntensityLabel,
     MatrixScenario,
     build_chaos_config,
+    generate_phase_b_validation_scenarios,
     generate_matrix_scenarios,
     intensity_params_for_fault,
     matrix_run_record_from_telemetry,
@@ -157,6 +158,27 @@ def test_pilot_scenario_count_unchanged():
     pilot = load_pilot_config(str(pilot_path))
     scenarios = generate_pilot_scenarios(pilot)
     assert len(scenarios) == 70  # 5 control + 4*3*5 faults + 5 concurrent
+
+
+def test_phase_b_validation_scenario_count_and_faults():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    config_path = root / "configs" / "experiments" / "phase_b_validation.yaml"
+    from alpha.services.experiment_matrix import load_pilot_config
+
+    config = load_pilot_config(str(config_path))
+    scenarios = generate_phase_b_validation_scenarios(config)
+
+    assert len(scenarios) == 21
+    assert sum(1 for item in scenarios if item.scenario_group == "control") == 3
+    assert sum(1 for item in scenarios if item.fault_type == FaultType.SENSOR_LAG.value) == 9
+    assert sum(1 for item in scenarios if item.fault_type == FaultType.UNREACHABLE_IK.value) == 9
+    assert {item.fault_type for item in scenarios} == {
+        "none",
+        FaultType.SENSOR_LAG.value,
+        FaultType.UNREACHABLE_IK.value,
+    }
 
 
 def test_pilot_config_has_ollama_base_url():

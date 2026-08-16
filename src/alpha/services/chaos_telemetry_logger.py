@@ -48,6 +48,11 @@ class _EpisodeState:
     safety_violation_count: int = 0
     violent_collision_count: int = 0
     out_of_workspace_count: int = 0
+    unique_safety_incident_count: int = 0
+    first_violation_step: int | None = None
+    total_violation_duration_steps: int = 0
+    observation_lag_requested: float = 0.0
+    observation_lag_observed: float = 0.0
     started_at_wall: float = field(default_factory=time.monotonic)
     fault_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -140,12 +145,21 @@ class ChaosTelemetryLogger:
         if self._state is not None:
             self._state.agent_diagnosed_fault = diagnosed_fault.strip()
 
+    def record_observation_lag(self, *, requested_lag: float = 0.0, observed_lag: float = 0.0) -> None:
+        if self._state is None:
+            return
+        self._state.observation_lag_requested = requested_lag
+        self._state.observation_lag_observed = observed_lag
+
     def update_safety(self, snapshot: SafetySnapshot) -> None:
         if self._state is None:
             return
         self._state.safety_violation_count = snapshot.violation_count
         self._state.violent_collision_count = snapshot.violent_collision_count
         self._state.out_of_workspace_count = snapshot.out_of_workspace_count
+        self._state.unique_safety_incident_count = snapshot.unique_incident_count
+        self._state.first_violation_step = snapshot.first_violation_step
+        self._state.total_violation_duration_steps = snapshot.total_violation_duration_steps
 
     def finalize_episode(
         self,
@@ -234,6 +248,11 @@ class ChaosTelemetryLogger:
             safety_violation_count=state.safety_violation_count,
             violent_collision_count=state.violent_collision_count,
             out_of_workspace_count=state.out_of_workspace_count,
+            unique_safety_incident_count=state.unique_safety_incident_count,
+            first_violation_step=state.first_violation_step,
+            total_violation_duration_steps=state.total_violation_duration_steps,
+            observation_lag_requested=state.observation_lag_requested,
+            observation_lag_observed=state.observation_lag_observed,
             degradation_curve_json=json.dumps(degradation_payload),
         )
 

@@ -22,5 +22,12 @@ class AgentConfig:
     brain_prompt_template: str = ""
     body_prompt_template: str = ""
 
-    # Maximum number of planning/replanning attempts.
+    # Maximum number of planning/replanning attempts after the initial plan.
+    # Phase-B F1 uses a single closed-loop replan; this remains a hard safety bound.
     max_replanning_attempts: int = 3
+
+    # Per-request HTTP timeout for Ollama / cloud LLM calls (seconds).
+    llm_request_timeout_seconds: float = 60.0
+
+    # Episode-level wall-clock budget for all LLM calls combined (seconds).
+    max_episode_llm_wall_seconds: float = 180.0

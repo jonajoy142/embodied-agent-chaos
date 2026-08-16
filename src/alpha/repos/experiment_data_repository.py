@@ -29,8 +29,8 @@ class ExperimentDataRepository:
         raw_root: str = settings.RAW_DATA_DIR,
         processed_root: str = settings.PROCESSED_DATA_DIR,
     ) -> None:
-        if phase not in {"pilot", "final"}:
-            raise ValueError("phase must be 'pilot' or 'final'")
+        if phase not in {"pilot", "phase_b", "final"}:
+            raise ValueError("phase must be 'pilot', 'phase_b', or 'final'")
         self.experiment_id = experiment_id
         self.phase = phase
         self.raw_dir = Path(raw_root) / phase / experiment_id

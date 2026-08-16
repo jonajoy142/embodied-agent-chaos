@@ -18,6 +18,7 @@ class AgentRunHooks:
 
     on_before_action: Callable[[int, ActionStep, Any | None], None] | None = None
     on_after_action: Callable[[int, ActionStep, Any | None], None] | None = None
+    on_replan: Callable[[int, dict[str, Any]], None] | None = None
     fault_events_provider: Callable[[], list[dict[str, Any]]] | None = None
     fault_type: FaultType = FaultType.NONE
     fault_seed: int | None = None

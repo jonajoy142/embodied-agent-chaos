@@ -86,6 +86,40 @@ def test_sensor_lag_returns_stale_observation():
 
     assert delayed == first
     assert wrapper.event_log()[-1]["fault_applied"] is True
+    requested, observed = wrapper.observation_lag_metrics()
+    assert requested == pytest.approx(2.0)
+    assert observed == pytest.approx(3.0)
+
+
+def test_observation_lag_metrics_preserve_max_observed_lag():
+    """Non-applied wraps must not wipe a previously measured observed lag."""
+    config = ChaosConfig(
+        seed=1,
+        sim_timestep=1.0,
+        faults=(
+            FaultSpec(
+                fault_type=FaultType.SENSOR_LAG,
+                enabled=True,
+                trigger=TriggerConfig(kind=TriggerKind.IMMEDIATE),
+                intensity=FaultIntensity(lag_seconds=2.0),
+                probability=1.0,
+            ),
+        ),
+    )
+    wrapper = ChaosRoboticsWrapper(FakeSimulator(), config)
+
+    wrapper.wrap_observation({"blocks": {"red": [0.1, 0.2, 0.3]}})
+    wrapper.context.elapsed_seconds = 3.0
+    wrapper.wrap_observation({"blocks": {"red": [0.9, 0.8, 0.7]}})
+    requested_after_apply, observed_after_apply = wrapper.observation_lag_metrics()
+    assert requested_after_apply == pytest.approx(2.0)
+    assert observed_after_apply == pytest.approx(3.0)
+
+    wrapper._should_apply_spec = lambda _spec: False  # type: ignore[method-assign]
+    wrapper.wrap_observation({"blocks": {"red": [1.0, 1.0, 1.0]}})
+    requested, observed = wrapper.observation_lag_metrics()
+    assert requested == pytest.approx(2.0)
+    assert observed == pytest.approx(3.0)
 
 
 def test_unreachable_ik_offsets_move_target():

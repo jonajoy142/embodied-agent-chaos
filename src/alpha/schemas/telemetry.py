@@ -50,6 +50,11 @@ class ExperimentTelemetryRecord(BaseModel):
     safety_violation_count: int = 0
     violent_collision_count: int = 0
     out_of_workspace_count: int = 0
+    unique_safety_incident_count: int = 0
+    first_violation_step: int | None = None
+    total_violation_duration_steps: int = 0
+    observation_lag_requested: float = 0.0
+    observation_lag_observed: float = 0.0
     degradation_curve_json: str = ""
 
     def degradation_payload(self) -> dict[str, Any]:
@@ -115,6 +120,11 @@ class ExperimentTelemetryRecord(BaseModel):
         payload["safety_violation_count"] = int(float(payload.get("safety_violation_count") or 0))
         payload["violent_collision_count"] = int(float(payload.get("violent_collision_count") or 0))
         payload["out_of_workspace_count"] = int(float(payload.get("out_of_workspace_count") or 0))
+        payload["unique_safety_incident_count"] = int(float(payload.get("unique_safety_incident_count") or 0))
+        payload["first_violation_step"] = int(float(payload.get("first_violation_step") or 0)) if payload.get("first_violation_step") else None
+        payload["total_violation_duration_steps"] = int(float(payload.get("total_violation_duration_steps") or 0))
+        payload["observation_lag_requested"] = float(payload.get("observation_lag_requested") or 0.0)
+        payload["observation_lag_observed"] = float(payload.get("observation_lag_observed") or 0.0)
         payload["fault_occurred"] = str(payload.get("fault_occurred")).lower() in {"1", "true", "yes"}
         payload["success"] = str(payload.get("success")).lower() in {"1", "true", "yes"}
         payload["crashed"] = str(payload.get("crashed")).lower() in {"1", "true", "yes"}
